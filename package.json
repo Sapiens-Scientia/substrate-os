@@ -1,0 +1,12 @@
+{
+  "name": "substrate-os",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node scripts/seed-demo.js && node server.js"
+  }
+}

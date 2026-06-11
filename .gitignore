@@ -1,0 +1,14 @@
+# Generated demo substrate — recreated by `npm run demo` or auto-seeded by the
+# server on first run (see ensureRoot in server.js). Deterministic via the seeder.
+demo-substrate/
+
+# Substrate runtime state, if a real root is ever scanned in-repo
+.substrate/
+
+# Node / OS noise
+node_modules/
+*.log
+.DS_Store
+
+# Local-only Claude settings (keep launch.json, ignore personal settings)
+.claude/settings.local.json
