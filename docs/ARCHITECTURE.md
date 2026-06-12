@@ -594,3 +594,36 @@ Frontend (`web/js/api.js` + `web/js/effectors.js` + `web/css/main.css`):
   panel if the call fails (catch → show nothing / a quiet note).
 - `main.css`: style `.apps-section`, `.app-chip`, `.app-icon`, `.app-name`, the
   scroll area, and the reveal affordance, in the existing calm dark-glass language.
+
+### 16.3 v3 amendment — orthogonal outline tree (supersedes §16.1's layout)
+
+The Filespace layout is now an **indented outline**, not a centered organic tree:
+root at the **top-left** just below the membrane; each depth level is a column
+`INDENT` px further right; nodes stack downward one row each in DFS order.
+Connectors are **straight elbows only** — a vertical spine drops from a parent,
+horizontal arms branch across to each child; widths remain ∝ subtree bytes.
+**Folders are squares, files are circles** (r = half-side / radius ∝ log2 bytes);
+state rings follow the node shape (segments along a square's top edge replace the
+partial arcs). Labels are single-line (name + inline size) since every row is
+exclusive. The marble block and membrane grow down/right with the tree so the
+excavation never collides with the walls. Everything else in §16.1/§9 (walls,
+membrane, cavity, gauge, camera, selection, pulses, release particles, breathing)
+is unchanged.
+
+### 16.4 v4 amendment — capacity model + camera containment
+
+- **The visible root is always the drive** (top level of the local machine): a
+  synthetic square node (name from the disk mount, e.g. "Macintosh HD", size =
+  used bytes) sits at top-left; the scanned folder hangs off it at depth 1. It
+  is hoverable but has no path, so it can never be selected or sent to effectors.
+- **Vertical extent IS the storage cue**: a leaf's row height grows with its
+  bytes (the scanned tree spends MASS_BUDGET px of pure mass, per-row capped);
+  a folder's spine height is the sum of its descendants' rows; and the block's
+  content height below the drive node represents the WHOLE disk capacity — the
+  drive's spine digs down to the used fraction of it (dimmed below the scanned
+  tree, labeled "<n> elsewhere on drive", end-capped at the used/free boundary),
+  and the marble below that is free space. As storage fills, the top-level
+  branch extends further down.
+- **The camera only zooms IN**: minimum zoom is "the block exactly fills the
+  view"; pan is clamped to the block's extents. Nothing outside the Filespace
+  box is ever revealed.

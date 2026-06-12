@@ -127,10 +127,13 @@ function linkWidth(bytes, refBytes) {
 
 // ---------------------------------------------------------------------------
 // layoutTree — PURE. tree: TreeNode; viewport: {width, height, diskTotal}.
-// Returns { membrane, block, carve, nodes, links, hints, nodeByPath, bounds }.
-// Mass-weighted tidy tree: each node owns a horizontal band ∝
-// max(leafCount, sqrt(bytes)); parent centered over its children; minimum
-// sibling gap ≥ node diameter + 6px; y by depth.
+// Returns { membrane, block, carve, nodes, links, spines, hints, nodeByPath, bounds }.
+// Indented outline: root at top-LEFT; each depth level is a column INDENT px
+// further right; nodes stack downward in DFS order, one row each. Connectors
+// are straight elbows: a vertical spine descends from a parent, horizontal
+// arms branch across to each child. Folders are squares, files are circles
+// (r = half-side / radius ∝ log2 bytes). The marble block grows down/right
+// with the tree — nothing is in its way.
 
 export function layoutTree(tree, viewport) {
   const W = Math.max(1, viewport.width || 1);
@@ -139,31 +142,35 @@ export function layoutTree(tree, viewport) {
   const block = { x: 0, y: MEMBRANE_H, w: W, h: H - MEMBRANE_H };
   const out = {
     membrane, block, carve: null,
-    nodes: [], links: [], hints: [],
+    nodes: [], links: [], spines: [], hints: [],
     nodeByPath: new Map(),
     bounds: { minX: 0, maxX: W, minY: MEMBRANE_H, maxY: H },
   };
   if (!tree) return out;
 
-  const diskTotal = viewport.diskTotal > 0 ? viewport.diskTotal : Math.max((tree.size || 1) * 2, 1);
-  // reference mass for branch thickness = the largest subtree in THIS tree
-  // (the root). Branch widths span the full LINK_MIN..LINK_MAX range against it.
+  // reference mass for connector thickness = the largest subtree in THIS tree
+  // (the root). Widths span LINK_MIN..LINK_MAX against it.
   const massRef = Math.max(tree.size || 0, 1);
 
-  // carved cavity (kept for the luminous shaft + honest fraction cue): the tree
-  // root sits at its top-center, just below the membrane.
-  const frac = clamp((tree.size || 0) / diskTotal, 0.28, 0.86);
-  const carveX = block.x + 40;
-  const carveW = Math.max(60, Math.min(frac * block.w, block.w - carveX - 48));
-  out.carve = { x: carveX, w: carveW };
+  const LEFT_PAD = 56;   // drive column x (center), inside the left wall
+  const INDENT = 72;     // px per depth level, rightward
+  const ROW_GAP = 8;     // vertical gap between rows
+  const rootY = block.y + 36; // drive row, just below the membrane
 
-  // level (depth) spacing — upper levels breathe, deep levels tighten.
-  const levelGap = d => Math.max(64, 132 - d * 8);
-
-  // y per depth, precomputed cumulatively.
-  const rootY = block.y + 30; // a little below the membrane
-  const depthY = [rootY];
-  for (let d = 1; d <= MAX_DEPTH + 1; d++) depthY[d] = depthY[d - 1] + levelGap(d - 1);
+  // The visible root is always the DRIVE (top level of the local machine);
+  // the scanned folder hangs off it. Vertical extent is the storage cue:
+  // a leaf's row height grows with its bytes (scaled so the whole scanned
+  // tree spends MASS_BUDGET px of pure mass), a folder's spine spans the sum
+  // of its descendants' rows, and the drive's spine runs down to the disk's
+  // used fraction of the block's capacity height — a filling disk digs deeper.
+  const diskTotal = viewport.diskTotal > 0 ? viewport.diskTotal : Math.max((tree.size || 1) * 2, 1);
+  const diskUsed = viewport.diskUsed > 0 ? viewport.diskUsed
+    : Math.max(tree.size || 0, diskTotal * 0.5);
+  const mount = viewport.diskMount || '/';
+  const driveName = mount === '/' ? 'Macintosh HD' : mount;
+  const MASS_BUDGET = 680;
+  const MASS_ROW_MAX = 170;
+  const S = MASS_BUDGET / Math.max(tree.size || 1, 1);
 
   const radiusOf = node => {
     if (node.kind === 'more') return MORE_R;
@@ -171,8 +178,9 @@ export function layoutTree(tree, viewport) {
     return fileRadius(node.size || 0);
   };
 
-  // First pass: build a layout-node tree, compute weight + the band width each
-  // node needs (max of its own footprint and the sum of its children's bands).
+  // Build a layout-node tree. x is fixed by depth (column); y is assigned in
+  // DFS row order below. Folders render as squares (r = half side), files and
+  // 'more' aggregates as circles.
   let nextId = 0;
   const mkNode = (node, depth, kind) => {
     const path = node.path || '';
@@ -180,17 +188,28 @@ export function layoutTree(tree, viewport) {
     const ln = {
       id: nextId++, node, path, depth, kind,
       r: radiusOf(node),
-      x: 0, y: depthY[depth] || rootY,
+      shape: (kind === 'dir') ? 'square' : 'circle',
+      x: LEFT_PAD + depth * INDENT, y: 0,
       parent: null, kids: [],
-      width: 0, weight: 0,
       phase: (hsh % 1024) / 1024 * Math.PI * 2,
       jit: 0.8 + ((hsh >>> 10) % 512) / 512 * 0.4,
     };
     return ln;
   };
 
-  const root = mkNode(tree, 0, tree.kind || 'dir');
+  // synthetic drive node at depth 0 — always the visible root. No path: it is
+  // outside the scan root, so it is hoverable but never selectable.
+  const drive = mkNode(
+    { name: driveName, path: '', kind: 'drive', size: diskUsed, mtime: 0, states: [] },
+    0, 'drive',
+  );
+  drive.shape = 'square';
+  drive.r = ROOT_R + 2;
+
+  const root = mkNode(tree, 1, tree.kind || 'dir');
   root.r = ROOT_R;
+  root.parent = drive;
+  drive.kids.push(root);
 
   // build children recursively (depth-capped), merging 'more' nodes.
   const build = (node, ln) => {
@@ -237,120 +256,79 @@ export function layoutTree(tree, viewport) {
   };
   build(tree, root);
 
-  // leaf count + weight (bottom-up).
-  const measure = (ln) => {
-    if (!ln.kids.length) {
-      ln.leafCount = 1;
-    } else {
-      let lc = 0;
-      for (const k of ln.kids) lc += measure(k);
-      ln.leafCount = lc;
-    }
-    ln.weight = Math.max(ln.leafCount, Math.sqrt(Math.max(ln.node.size || 0, 0)) / 64 + 1);
-    return ln.leafCount;
-  };
-  measure(root);
-
-  // band width each subtree needs. A node needs at least its own diameter +
-  // padding; an internal node needs at least the sum of its children's bands
-  // plus the minimum sibling gaps.
-  const SIB_PAD = 6;
-  const minBand = (ln) => (ln.r * 2 + SIB_PAD * 2);
-  const computeWidth = (ln) => {
-    if (!ln.kids.length) { ln.width = minBand(ln); return ln.width; }
-    let sum = 0;
-    for (let i = 0; i < ln.kids.length; i++) {
-      const k = ln.kids[i];
-      computeWidth(k);
-      sum += k.width;
-      if (i > 0) {
-        // ensure ≥ node diameter + 6px between adjacent sibling centers' bands
-        const gapNeed = (ln.kids[i - 1].r + k.r) + SIB_PAD;
-        const have = (ln.kids[i - 1].width + k.width) / 2;
-        if (have < gapNeed) sum += (gapNeed - have);
-      }
-    }
-    ln.width = Math.max(minBand(ln), sum);
-    return ln.width;
-  };
-  computeWidth(root);
-
-  // assign x: lay children left→right within the parent's band, then center the
-  // parent over the span of its children.
-  const assignX = (ln, left) => {
-    if (!ln.kids.length) {
-      ln.x = left + ln.width / 2;
-      return;
-    }
-    let cx = left;
-    for (const k of ln.kids) {
-      assignX(k, cx);
-      cx += k.width;
-    }
-    const first = ln.kids[0], last = ln.kids[ln.kids.length - 1];
-    ln.x = (first.x + last.x) / 2;
-  };
-  // anchor the whole tree so the root lands at the carved shaft's center.
-  assignX(root, 0);
-  const shaftCenter = carveX + carveW / 2;
-  const shift = shaftCenter - root.x;
-
-  // flatten + apply shift; record bounds + links + nodeByPath.
+  // DFS row placement: each node gets its own row; rows stack downward.
+  // Leaves carry their byte-mass as extra row height (vertical extent ∝ size);
+  // a folder's spine height emerges as the sum of its descendants' rows.
   const b = out.bounds;
   b.minX = Infinity; b.maxX = -Infinity;
   b.minY = block.y; b.maxY = block.y;
-  const visit = (ln) => {
-    ln.x += shift;
+  let cursor = rootY;
+  const place = (ln) => {
+    const minH = Math.max(ln.r * 2, 16) + ROW_GAP;
+    const massH = (ln.kids.length || ln.kind === 'drive') ? 0
+      : Math.min((ln.node.size || 0) * S, MASS_ROW_MAX);
+    const rowH = Math.max(minH, massH);
+    ln.y = cursor + rowH / 2;
+    cursor += rowH;
     out.nodes.push(ln);
     if (ln.path && ln.kind !== 'more') out.nodeByPath.set(ln.path, ln);
+    // every row is exclusive — labels always have open space to the right.
+    ln.labelRoom = Infinity;
     b.minX = Math.min(b.minX, ln.x - ln.r);
     b.maxX = Math.max(b.maxX, ln.x + ln.r);
     b.maxY = Math.max(b.maxY, ln.y + ln.r);
-    if (ln.parent) {
-      out.links.push({
-        parent: ln.parent, child: ln,
-        w: linkWidth(ln.node.size || 0, massRef),
-      });
-    }
     if (ln.hasDeeper) {
-      out.hints.push({ x: ln.x, y: ln.y + ln.r, len: Math.max(28, levelGap(ln.depth) * 0.6) });
-      b.maxY = Math.max(b.maxY, ln.y + ln.r + Math.max(28, levelGap(ln.depth) * 0.6));
+      out.hints.push({ x: ln.x + ln.r + 5, y: ln.y, len: 26 });
+      b.maxX = Math.max(b.maxX, ln.x + ln.r + 5 + 26);
     }
-    for (const k of ln.kids) visit(k);
-  };
-  visit(root);
-  if (!Number.isFinite(b.minX)) { b.minX = 0; b.maxX = W; }
-
-  // per-node horizontal room for a right-side label: distance (world px) from
-  // where the label starts (x + r + LABEL_GAP) to the left edge of the nearest
-  // same-depth node to its right. Labels are clamped to this so a node never
-  // overruns its neighbour; nodes with too little room suppress their label
-  // (except when hovered/selected — drawn on top last). Eliminates label spam.
-  {
-    const byDepth = new Map();
-    for (const n of out.nodes) {
-      let row = byDepth.get(n.depth);
-      if (!row) { row = []; byDepth.set(n.depth, row); }
-      row.push(n);
-    }
-    for (const row of byDepth.values()) {
-      row.sort((a, c) => a.x - c.x);
-      for (let i = 0; i < row.length; i++) {
-        const n = row[i];
-        let room = Infinity;
-        for (let j = i + 1; j < row.length; j++) {
-          const m = row[j];
-          if (m.x + m.r <= n.x) continue; // fully left, ignore
-          room = (m.x - m.r) - (n.x + n.r + LABEL_GAP);
-          break;
-        }
-        n.labelRoom = room; // Infinity = open to the right
+    for (const k of ln.kids) place(k);
+    if (ln.kids.length) {
+      // one straight spine down from the parent, one straight arm across to
+      // each child — widths ∝ subtree bytes (the storage-mass cue).
+      const last = ln.kids[ln.kids.length - 1];
+      out.spines.push({
+        parent: ln,
+        x: ln.x, y0: ln.y + ln.r, y1: last.y,
+        w: clamp(linkWidth(ln.node.size || 0, massRef) * 0.6, 1.25, 7),
+      });
+      for (const k of ln.kids) {
+        out.links.push({
+          parent: ln, child: k,
+          x0: ln.x, x1: k.x - k.r - 1.5, y: k.y,
+          w: clamp(linkWidth(k.node.size || 0, massRef) * 0.75, 1, 9),
+        });
       }
     }
-  }
+  };
+  place(drive);
+  if (!Number.isFinite(b.minX)) { b.minX = 0; b.maxX = W; }
 
-  // include the trunk descending from the membrane to the root.
-  b.minY = block.y;
+  // capacity model: the block's content height below the drive node represents
+  // the WHOLE disk; the drive's spine digs down to the used fraction of it,
+  // the scanned tree hangs near its top, and the marble below the spine's end
+  // is the disk's free space — as storage fills, the spine extends further down.
+  const treeBottom = b.maxY;
+  const usedFrac = clamp(diskUsed / diskTotal, 0.12, 0.97);
+  const capacityH = Math.max(H - MEMBRANE_H - 60, (treeBottom - drive.y + 70) / usedFrac);
+  const usedY = drive.y + usedFrac * capacityH;
+  out.driveTail = {
+    x: drive.x,
+    y0: drive.y + drive.r,
+    y1: usedY,
+    labelY: (treeBottom + 14 + usedY) / 2,
+    w: clamp(linkWidth(diskUsed, Math.max(diskUsed, 1)) * 0.6, 2, 7),
+    bytes: Math.max(0, diskUsed - (tree.size || 0)),
+    freeY: drive.y + capacityH, // block-bottom of the capacity span
+  };
+
+  // the membrane spill hugs the drive's shaft at top-left.
+  out.carve = { x: drive.x - drive.r - 14, w: (drive.r + 14) * 2 };
+
+  // the block (and the membrane above it) grow down/right with the substrate —
+  // walls move outward so the excavation never collides with them.
+  block.w = Math.max(W, b.maxX + 220);
+  block.h = (drive.y + capacityH + 36) - MEMBRANE_H;
+  membrane.w = block.w;
 
   return out;
 }
@@ -367,31 +345,43 @@ export function initFilespace(container) {
   const tooltip = document.getElementById('tooltip');
   const host = container || canvas.parentElement;
 
-  const cs = getComputedStyle(document.documentElement);
-  const cv = (n, fb) => ((cs.getPropertyValue(n) || '').trim() || fb);
-  const theme = {
-    bg: cv('--bg', '#07090f'),
-    marble: cv('--marble', '#131a26'),
-    vein: cv('--marble-vein', '#1b2433'),
-    carve: cv('--carve', '#0c1018'),
-    chamber: cv('--chamber', '#223046'),
-    chamberHot: cv('--chamber-hot', '#2d4159'),
-    line: cv('--line', '#2c3a52'),
-    ink: cv('--ink', '#c8d4e8'),
-    inkDim: cv('--ink-dim', '#6b7a94'),
-    accent: cv('--accent', '#4cc9f0'),
-    gold: cv('--gold', '#f0b35e'),
-    green: cv('--green', '#69c98f'),
-    violet: cv('--violet', '#a78bfa'),
-    down: cv('--down', '#5e9bf0'),
-    hot: cv('--hot', '#ff6b6b'),
-    font: cv('--font', 'ui-sans-serif, -apple-system, "SF Pro", system-ui, sans-serif'),
-    mono: cv('--mono', 'ui-monospace, "SF Mono", Menlo, monospace'),
-  };
-  const dirFill = mix(theme.chamber, theme.carve, 0.22);
-  const fileFill = theme.chamber;
-  const wallFill = brighten(theme.line, 0.38);
-  const branchDim = mix(theme.vein, theme.carve, 0.4);
+  // Theme colors are re-sampled from CSS vars on theme:changed (light/dark).
+  const theme = {};
+  let dirFill, fileFill, wallFill, branchDim;
+  function readTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const cv = (n, fb) => ((cs.getPropertyValue(n) || '').trim() || fb);
+    Object.assign(theme, {
+      bg: cv('--bg', '#07090f'),
+      marble: cv('--marble', '#131a26'),
+      vein: cv('--marble-vein', '#1b2433'),
+      carve: cv('--carve', '#0c1018'),
+      chamber: cv('--chamber', '#223046'),
+      chamberHot: cv('--chamber-hot', '#2d4159'),
+      line: cv('--line', '#2c3a52'),
+      ink: cv('--ink', '#c8d4e8'),
+      inkDim: cv('--ink-dim', '#6b7a94'),
+      accent: cv('--accent', '#4cc9f0'),
+      gold: cv('--gold', '#f0b35e'),
+      green: cv('--green', '#69c98f'),
+      violet: cv('--violet', '#a78bfa'),
+      down: cv('--down', '#5e9bf0'),
+      hot: cv('--hot', '#ff6b6b'),
+      font: cv('--font', 'ui-sans-serif, -apple-system, "SF Pro", system-ui, sans-serif'),
+      mono: cv('--mono', 'ui-monospace, "SF Mono", Menlo, monospace'),
+    });
+    const light = document.documentElement.dataset.theme === 'light';
+    theme.sheenTop = light ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.022)';
+    theme.sheenBot = light ? 'rgba(36,51,73,0.08)' : 'rgba(0,0,0,0.25)';
+    dirFill = mix(theme.chamber, theme.carve, 0.22);
+    fileFill = theme.chamber;
+    // Walls must read HARD against the stone: brighter than hairlines in the
+    // dark theme, darker in the light theme.
+    wallFill = light ? darken(theme.line, 0.3) : brighten(theme.line, 0.38);
+    branchDim = mix(theme.vein, theme.carve, 0.4);
+  }
+  readTheme();
+  bus.on('theme:changed', () => { readTheme(); markDirty(); });
 
   const STRATA = Array.from({ length: 14 }, (_, i) => ({
     f: (i + 0.6) / 14.6,
@@ -436,6 +426,7 @@ export function initFilespace(container) {
       world = { w: cssW, h: cssH };
       relayout();
     }
+    clampCam();
     markDirty();
   }
 
@@ -444,14 +435,30 @@ export function initFilespace(container) {
     layout = layoutTree(state.tree, {
       width: world.w, height: world.h,
       diskTotal: state.disk ? state.disk.total : 0,
+      diskUsed: state.disk ? state.disk.used : 0,
+      diskMount: state.disk ? state.disk.mount : '/',
     });
     hoverNode = null;
     hoverSubtree = null;
+    clampCam();
     markDirty();
   }
 
   // --- coordinate transforms --------------------------------------------------
   const toWorld = (sx, sy) => ({ x: sx / cam.z + cam.x, y: sy / cam.z + cam.y });
+
+  // The Filespace only zooms IN: the camera can never reveal anything outside
+  // the marble block (+membrane). Min zoom = the block exactly fills the view;
+  // pan is clamped to the block's extents.
+  function clampCam() {
+    if (!cssW || !cssH) return;
+    const worldW = layout.block.x + layout.block.w;
+    const worldH = layout.block.y + layout.block.h;
+    const zFit = Math.max(cssW / Math.max(worldW, 1), cssH / Math.max(worldH, 1));
+    cam.z = clamp(cam.z, zFit, 8);
+    cam.x = clamp(cam.x, 0, Math.max(0, worldW - cssW / cam.z));
+    cam.y = clamp(cam.y, 0, Math.max(0, worldH - cssH / cam.z));
+  }
 
   function hitTest(wp) {
     const n = layout.nodes;
@@ -649,18 +656,18 @@ export function initFilespace(container) {
     const r = canvas.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
-    const nz = Math.min(8, Math.max(0.5, cam.z * Math.exp(-e.deltaY * 0.0016)));
-    if (nz === cam.z) return;
+    const nz = cam.z * Math.exp(-e.deltaY * 0.0016);
     cam.z = nz;
     cam.x = wx - sx / nz;
     cam.y = wy - sy / nz;
+    clampCam();
     userMoved = true;
     markDirty();
   }, { passive: false });
 
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic/stale pointer */ }
     const r = canvas.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const wp = toWorld(sx, sy);
@@ -678,6 +685,7 @@ export function initFilespace(container) {
       if (drag.mode === 'pan') {
         cam.x -= (sx - (drag.lx ?? drag.sx)) / cam.z;
         cam.y -= (sy - (drag.ly ?? drag.sy)) / cam.z;
+        clampCam();
         drag.lx = sx; drag.ly = sy;
         userMoved = true;
         canvas.style.cursor = 'grabbing';
@@ -812,9 +820,9 @@ export function initFilespace(container) {
     ctx.fillStyle = theme.marble;
     ctx.fillRect(b.x, b.y, b.w, b.h);
     const g = ctx.createLinearGradient(0, b.y, 0, b.y + b.h);
-    g.addColorStop(0, 'rgba(255,255,255,0.022)');
+    g.addColorStop(0, theme.sheenTop);
     g.addColorStop(0.5, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.25)');
+    g.addColorStop(1, theme.sheenBot);
     ctx.fillStyle = g;
     ctx.fillRect(b.x, b.y, b.w, b.h);
 
@@ -831,109 +839,140 @@ export function initFilespace(container) {
     }
   }
 
-  // a soft luminous cavity behind the tree so it reads as carved-out space.
+  // rounded-rect path helper (per-corner fallback for older canvases).
+  function rrPath(x, y, w, h, radii) {
+    if (typeof ctx.roundRect === 'function') { ctx.roundRect(x, y, w, h, radii); return; }
+    const r = Array.isArray(radii) ? radii[2] || 0 : radii || 0;
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+
+  // the excavated gallery: a soft-edged carved pocket hugging the outline,
+  // opening downward-and-rightward from the shaft at top-left.
   function drawCavity() {
-    if (!layout.carve) return;
+    if (!layout.nodes.length) return;
     const bnd = layout.bounds;
-    const cx = (bnd.minX + bnd.maxX) / 2;
-    const top = layout.block.y;
-    const bot = bnd.maxY + 24;
-    const halfW = Math.max((bnd.maxX - bnd.minX) / 2 + 70, layout.carve.w / 2 + 40);
-    const halfH = (bot - top) / 2;
-    const my = (top + bot) / 2;
+    const x = bnd.minX - 28;
+    const y = layout.block.y;
+    const w = (bnd.maxX + 170) - x;
+    const h = (bnd.maxY + 30) - y;
     ctx.save();
-    const g = ctx.createRadialGradient(cx, my, Math.min(halfW, halfH) * 0.2, cx, my, Math.max(halfW, halfH));
-    g.addColorStop(0, rgba(theme.carve, 0.92));
-    g.addColorStop(0.62, rgba(theme.carve, 0.55));
-    g.addColorStop(1, rgba(theme.carve, 0));
-    ctx.fillStyle = g;
+    ctx.shadowColor = rgba(theme.carve, 0.95);
+    ctx.shadowBlur = 42;
+    ctx.fillStyle = rgba(theme.carve, 0.92);
     ctx.beginPath();
-    ctx.ellipse(cx, my, halfW, halfH, 0, 0, Math.PI * 2);
+    rrPath(x, y, w, h, [0, 0, 20, 20]); // flush with the membrane on top
     ctx.fill();
+    // narrow shaft continuing down around the drive's spine to the used-storage
+    // boundary — everything below it stays uncarved marble (free space).
+    const tail = layout.driveTail;
+    if (tail && tail.y1 > y + h - 22) {
+      ctx.beginPath();
+      rrPath(tail.x - 26, y + h - 22, 52, (tail.y1 + 20) - (y + h - 22), [0, 0, 14, 14]);
+      ctx.fill();
+    }
     ctx.restore();
 
     // luminous spill where the shaft meets the membrane.
-    const sg = ctx.createLinearGradient(0, layout.block.y, 0, layout.block.y + 40);
-    sg.addColorStop(0, rgba(theme.accent, 0.12));
-    sg.addColorStop(1, rgba(theme.accent, 0));
-    ctx.fillStyle = sg;
-    ctx.fillRect(layout.carve.x - 2, layout.block.y, layout.carve.w + 4, 40);
+    if (layout.carve) {
+      const sg = ctx.createLinearGradient(0, y, 0, y + 40);
+      sg.addColorStop(0, rgba(theme.accent, 0.12));
+      sg.addColorStop(1, rgba(theme.accent, 0));
+      ctx.fillStyle = sg;
+      ctx.fillRect(layout.carve.x - 2, y, layout.carve.w + 4, 40);
+    }
   }
 
-  // organic, slightly-curved tapered branch from parent bottom to child top.
-  function drawLink(link, vw, now) {
-    const p = link.parent, c = link.child;
-    // cull if entirely off-screen
-    const minX = Math.min(p.x, c.x) - 8, maxX = Math.max(p.x, c.x) + 8;
-    const minY = p.y, maxY = c.y;
-    if (maxX < vw.x0 || minX > vw.x1 || maxY < vw.y0 || minY > vw.y1) return;
+  function connectorStyle(focusNode) {
+    const sel = isSelected(focusNode);
+    const lit = hoverSubtree && hoverSubtree.has(focusNode.id);
+    if (sel) return rgba(theme.accent, 0.8);
+    if (lit) return rgba(mix(theme.accent, branchDim, 0.35), 0.85);
+    return rgba(mix(theme.line, theme.vein, 0.35), 0.7);
+  }
 
-    const sel = isSelected(c);
-    const lit = (hoverSubtree && hoverSubtree.has(c.id));
-    const x1 = p.x, y1 = p.y + p.r * 0.5;
-    const x2 = c.x, y2 = c.y - c.r * 0.6;
-    const dy = y2 - y1;
-    // gentle organic bow toward the child's side
-    const bow = clamp((x2 - x1) * 0.12, -22, 22);
-    const c1x = x1 + bow * 0.4, c1y = y1 + dy * 0.42;
-    const c2x = x2 - bow * 0.4, c2y = y2 - dy * 0.42;
-
-    const w = Math.max(LINK_MIN * 0.8, link.w);
-
-    // gradient: vein→carve along the branch, brightening near the nodes.
-    const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-    let near, mid;
-    if (sel) { near = brighten(theme.accent, 0.1); mid = mix(theme.accent, branchDim, 0.55); }
-    else if (lit) { near = brighten(theme.accent, 0.0); mid = mix(theme.accent, branchDim, 0.7); }
-    else { near = mix(theme.line, theme.vein, 0.4); mid = branchDim; }
-    grad.addColorStop(0, rgba(near, sel || lit ? 0.85 : 0.7));
-    grad.addColorStop(0.5, rgba(mid, sel || lit ? 0.75 : 0.5));
-    grad.addColorStop(1, rgba(near, sel || lit ? 0.95 : 0.78));
-
-    // taper: draw the branch as a filled quad-ish ribbon (wide at parent,
-    // narrowing toward child) using two offset beziers.
-    const wp = w, wc = Math.max(LINK_MIN * 0.7, w * 0.55);
-    ctx.save();
-    if (sel || lit) {
-      ctx.shadowColor = rgba(theme.accent, 0.4);
-      ctx.shadowBlur = 6;
-    }
+  // straight vertical spine from a parent down to its last child's row.
+  function drawSpine(s, vw) {
+    if (s.x < vw.x0 - 8 || s.x > vw.x1 + 8 || s.y1 < vw.y0 || s.y0 > vw.y1) return;
+    ctx.strokeStyle = connectorStyle(s.parent);
+    ctx.lineWidth = s.w;
     ctx.beginPath();
-    ctx.moveTo(x1 - wp / 2, y1);
-    ctx.bezierCurveTo(c1x - wp / 2, c1y, c2x - wc / 2, c2y, x2 - wc / 2, y2);
-    ctx.lineTo(x2 + wc / 2, y2);
-    ctx.bezierCurveTo(c2x + wc / 2, c2y, c1x + wp / 2, c1y, x1 + wp / 2, y1);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
+    ctx.moveTo(s.x, s.y0);
+    ctx.lineTo(s.x, s.y1);
+    ctx.stroke();
+  }
+
+  // straight horizontal arm from the spine across to the child's left edge.
+  function drawLink(link, vw) {
+    if (link.y < vw.y0 || link.y > vw.y1 || link.x0 > vw.x1 || link.x1 < vw.x0) return;
+    const sel = isSelected(link.child);
+    const lit = hoverSubtree && hoverSubtree.has(link.child.id);
+    ctx.save();
+    if (sel || lit) { ctx.shadowColor = rgba(theme.accent, 0.35); ctx.shadowBlur = 5; }
+    ctx.strokeStyle = connectorStyle(link.child);
+    ctx.lineWidth = link.w;
+    ctx.beginPath();
+    ctx.moveTo(link.x0, link.y);
+    ctx.lineTo(link.x1, link.y);
+    ctx.stroke();
     ctx.restore();
   }
 
-  function drawTrunk() {
-    // the trunk descends from the membrane into the root node.
-    const root = layout.nodes[0];
-    if (!root) return;
-    const x = root.x;
-    const yTop = layout.block.y;
-    const yBot = root.y - root.r * 0.4;
-    const w = LINK_MAX;
-    const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
-    grad.addColorStop(0, rgba(theme.accent, 0.32));
-    grad.addColorStop(0.4, rgba(mix(theme.accent, branchDim, 0.6), 0.55));
-    grad.addColorStop(1, rgba(mix(theme.line, theme.vein, 0.4), 0.78));
+  // the drive's spine continuing below the scanned tree: the rest of the
+  // disk's USED storage, ending at the used/free boundary. Dimmed — it is real
+  // mass, just outside the scanned root.
+  function drawDriveTail() {
+    const t = layout.driveTail;
+    if (!t || t.y1 <= t.y0) return;
+    const col = mix(theme.line, theme.vein, 0.5);
+    const grad = ctx.createLinearGradient(0, t.y0, 0, t.y1);
+    grad.addColorStop(0, rgba(col, 0.65));
+    grad.addColorStop(1, rgba(col, 0.4));
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = t.w;
     ctx.beginPath();
-    ctx.moveTo(x - w / 2, yTop);
-    ctx.lineTo(x - w / 2 * 0.8, yBot);
-    ctx.lineTo(x + w / 2 * 0.8, yBot);
-    ctx.lineTo(x + w / 2, yTop);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
+    ctx.moveTo(t.x, t.y0);
+    ctx.lineTo(t.x, t.y1);
+    ctx.stroke();
+    // end cap: the used/free boundary.
+    ctx.strokeStyle = rgba(theme.inkDim, 0.7);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(t.x - 10, t.y1);
+    ctx.lineTo(t.x + 10, t.y1);
+    ctx.stroke();
+    if (t.bytes > 0) {
+      ctx.font = `9px ${theme.mono}`;
+      ctx.fillStyle = rgba(theme.inkDim, 0.8);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${fmtBytes(t.bytes)} elsewhere on drive`, t.x + 16, t.labelY || (t.y0 + t.y1) / 2);
+      ctx.fillText('free space below', t.x + 16, t.y1 + 1);
+    }
   }
 
+  function drawTrunk() {
+    // the shaft drops straight from the membrane into the root node.
+    const root = layout.nodes[0];
+    if (!root) return;
+    const yTop = layout.block.y;
+    const yBot = root.y - root.r;
+    const w = Math.max(6, LINK_MAX * 0.7);
+    const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
+    grad.addColorStop(0, rgba(theme.accent, 0.32));
+    grad.addColorStop(0.5, rgba(mix(theme.accent, branchDim, 0.6), 0.55));
+    grad.addColorStop(1, rgba(mix(theme.line, theme.vein, 0.4), 0.78));
+    ctx.fillStyle = grad;
+    ctx.fillRect(root.x - w / 2, yTop, w, Math.max(0, yBot - yTop));
+  }
+
+  // unexcavated depth beyond the cap: dashes trailing off rightward.
   function drawHints() {
     for (const h of layout.hints) {
-      const grad = ctx.createLinearGradient(0, h.y, 0, h.y + h.len);
+      const grad = ctx.createLinearGradient(h.x, 0, h.x + h.len, 0);
       grad.addColorStop(0, rgba(mix(theme.line, theme.carve, 0.4), 0.5));
       grad.addColorStop(1, rgba(theme.carve, 0));
       ctx.strokeStyle = grad;
@@ -941,13 +980,21 @@ export function initFilespace(container) {
       ctx.setLineDash([2, 4]);
       ctx.beginPath();
       ctx.moveTo(h.x, h.y);
-      ctx.lineTo(h.x, h.y + h.len);
+      ctx.lineTo(h.x + h.len, h.y);
       ctx.stroke();
       ctx.setLineDash([]);
     }
   }
 
-  // state ring/arc around a node.
+  // shape-aware outline path at offset R from the node center: a circle for
+  // files, a rounded square for folders.
+  function nodeRingPath(ln, R) {
+    ctx.beginPath();
+    if (ln.shape === 'square') rrPath(ln.x - R, ln.y - R, R * 2, R * 2, 3);
+    else ctx.arc(ln.x, ln.y, R, 0, Math.PI * 2);
+  }
+
+  // state ring around a node (ring shape follows the node shape).
   function drawStateRings(ln, r, now) {
     const states = ln.kind === 'more' ? [] : effStates(ln);
     if (!states.length) return;
@@ -959,8 +1006,7 @@ export function initFilespace(container) {
       ctx.shadowBlur = 12;
       ctx.strokeStyle = theme.gold;
       ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(ln.x, ln.y, r + 3.5, 0, Math.PI * 2);
+      nodeRingPath(ln, r + 3.5);
       ctx.stroke();
       ctx.restore();
     }
@@ -970,28 +1016,42 @@ export function initFilespace(container) {
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = rgba(theme.violet, 0.9);
       ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(ln.x, ln.y, r + (states.includes('published') ? 6 : 3.5), 0, Math.PI * 2);
+      nodeRingPath(ln, r + (states.includes('published') ? 6 : 3.5));
       ctx.stroke();
       ctx.restore();
     }
-    // synced / downloaded / shared → colored arcs around the node.
-    const arcs = [];
-    if (states.includes('synced')) arcs.push(theme.accent);
-    if (states.includes('downloaded')) arcs.push(theme.down);
-    if (states.includes('shared')) arcs.push(theme.green);
-    if (arcs.length) {
-      const rr = r + 2.5;
-      const span = (Math.PI * 1.4) / arcs.length;
-      let a0 = -Math.PI * 0.7;
+    // synced / downloaded / shared → colored marks: arcs around circles,
+    // segments along a square's top edge.
+    const marks = [];
+    if (states.includes('synced')) marks.push(theme.accent);
+    if (states.includes('downloaded')) marks.push(theme.down);
+    if (states.includes('shared')) marks.push(theme.green);
+    if (marks.length) {
       ctx.lineWidth = 1.8;
       ctx.lineCap = 'round';
-      for (const col of arcs) {
-        ctx.strokeStyle = col;
-        ctx.beginPath();
-        ctx.arc(ln.x, ln.y, rr, a0 + span * 0.08, a0 + span * 0.92);
-        ctx.stroke();
-        a0 += span;
+      if (ln.shape === 'square') {
+        const y = ln.y - r - 3;
+        const span = (r * 2) / marks.length;
+        let x0 = ln.x - r;
+        for (const col of marks) {
+          ctx.strokeStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(x0 + span * 0.1, y);
+          ctx.lineTo(x0 + span * 0.9, y);
+          ctx.stroke();
+          x0 += span;
+        }
+      } else {
+        const rr = r + 2.5;
+        const span = (Math.PI * 1.4) / marks.length;
+        let a0 = -Math.PI * 0.7;
+        for (const col of marks) {
+          ctx.strokeStyle = col;
+          ctx.beginPath();
+          ctx.arc(ln.x, ln.y, rr, a0 + span * 0.08, a0 + span * 0.92);
+          ctx.stroke();
+          a0 += span;
+        }
       }
       ctx.lineCap = 'butt';
     }
@@ -1045,18 +1105,23 @@ export function initFilespace(container) {
     ctx.arc(ln.x, ln.y, r * 2.4, 0, Math.PI * 2);
     ctx.fill();
 
-    // node disc
+    // node body — square chamber for folders, circular chamber for files.
     let fill = isDir ? dirFill : fileFill;
     if (isRoot) fill = mix(theme.chamber, theme.accent, 0.18);
     if (hov) fill = theme.chamberHot;
     ctx.save();
     ctx.globalAlpha = breath;
-    ctx.beginPath();
-    ctx.arc(ln.x, ln.y, r, 0, Math.PI * 2);
-    // inner sheen
-    const sheen = ctx.createRadialGradient(ln.x - r * 0.35, ln.y - r * 0.45, r * 0.1, ln.x, ln.y, r);
-    sheen.addColorStop(0, brighten(fill, isDir ? 0.22 : 0.16));
-    sheen.addColorStop(1, fill);
+    nodeRingPath(ln, r);
+    let sheen;
+    if (ln.shape === 'square') {
+      sheen = ctx.createLinearGradient(ln.x - r, ln.y - r, ln.x + r, ln.y + r);
+      sheen.addColorStop(0, brighten(fill, isDir ? 0.22 : 0.16));
+      sheen.addColorStop(1, fill);
+    } else {
+      sheen = ctx.createRadialGradient(ln.x - r * 0.35, ln.y - r * 0.45, r * 0.1, ln.x, ln.y, r);
+      sheen.addColorStop(0, brighten(fill, isDir ? 0.22 : 0.16));
+      sheen.addColorStop(1, fill);
+    }
     ctx.fillStyle = sheen;
     ctx.fill();
     ctx.restore();
@@ -1067,15 +1132,13 @@ export function initFilespace(container) {
         : isDir ? rgba(brighten(theme.line, 0.4), 0.9)
           : rgba(theme.line, 0.7);
     ctx.lineWidth = isDir ? 1.3 : 1;
-    ctx.beginPath();
-    ctx.arc(ln.x, ln.y, r, 0, Math.PI * 2);
+    nodeRingPath(ln, r);
     ctx.stroke();
 
     // opaque (skipped) dirs get a hatched look
     if (effStates(ln).includes('opaque')) {
       ctx.save();
-      ctx.beginPath();
-      ctx.arc(ln.x, ln.y, r - 0.5, 0, Math.PI * 2);
+      nodeRingPath(ln, r - 0.5);
       ctx.clip();
       ctx.strokeStyle = rgba(theme.line, 0.25);
       ctx.lineWidth = 1;
@@ -1097,8 +1160,7 @@ export function initFilespace(container) {
       ctx.shadowBlur = 10;
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(ln.x, ln.y, r + 2, 0, Math.PI * 2);
+      nodeRingPath(ln, r + 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -1113,8 +1175,7 @@ export function initFilespace(container) {
         ctx.shadowBlur = 20 * k;
         ctx.strokeStyle = rgba(theme.hot, 0.85 * k);
         ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.arc(ln.x, ln.y, r + 3 + (1 - k) * 6, 0, Math.PI * 2);
+        nodeRingPath(ln, r + 3 + (1 - k) * 6);
         ctx.stroke();
         ctx.restore();
       }
@@ -1155,15 +1216,15 @@ export function initFilespace(container) {
     ctx.fillStyle = hov || sel ? theme.ink : theme.inkDim;
     const name = ellipsize(ln, ln.node.name || '', maxWorld, `11px ${theme.font}`);
     if (!name) return;
-    // size below name when there's clearly room (larger nodes / higher zoom)
-    const showSize = (screenR >= 11 || cam.z >= 1.8);
+    // single-line: name, then size inline after it — outline rows are exclusive
+    // so the space to the right is always free.
+    ctx.fillText(name, lx, ln.y);
+    const showSize = (screenR >= 7 || cam.z >= 1.2);
     if (showSize) {
-      ctx.fillText(name, lx, ln.y - 5);
+      const nameW = ctx.measureText(name).width;
       ctx.font = `9px ${theme.mono}`;
       ctx.fillStyle = rgba(theme.inkDim, 0.8);
-      ctx.fillText(ellipsize(ln, fmtBytes(ln.node.size || 0), maxWorld, `9px ${theme.mono}`, 'Sz'), lx, ln.y + 6);
-    } else {
-      ctx.fillText(name, lx, ln.y);
+      ctx.fillText(fmtBytes(ln.node.size || 0), lx + nameW + 8, ln.y + 0.5);
     }
   }
 
@@ -1339,8 +1400,10 @@ export function initFilespace(container) {
     drawCavity();
 
     const vw = visibleWorld();
-    // links first (under nodes), then trunk, then nodes on top.
-    for (const link of layout.links) drawLink(link, vw, now);
+    // connectors first (under nodes): drive tail beneath, spines, arms, trunk.
+    drawDriveTail();
+    for (const s of layout.spines) drawSpine(s, vw);
+    for (const link of layout.links) drawLink(link, vw);
     drawTrunk();
     drawHints();
     for (const ln of layout.nodes) drawNode(ln, now, vw);

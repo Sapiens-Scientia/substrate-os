@@ -95,6 +95,21 @@ export function nodeByPath(path) {
   return walk(state.tree);
 }
 
+// --- theme -------------------------------------------------------------------
+// index.html applies the saved/system theme pre-paint; these helpers switch it
+// at runtime. Canvas renderers listen for theme:changed to re-sample CSS vars.
+
+export function currentTheme() {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+export function setTheme(theme) {
+  if (theme !== 'light' && theme !== 'dark') return;
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('substrate-theme', theme); } catch { /* private mode */ }
+  bus.emit('theme:changed', { theme });
+}
+
 // --- toast -----------------------------------------------------------------
 // Exported here AND attached as window.__toast so any module can call it
 // without an import dependency on this file.

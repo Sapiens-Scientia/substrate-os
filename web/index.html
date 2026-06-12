@@ -7,6 +7,12 @@
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20x='3.5'%20y='3.5'%20width='25'%20height='25'%20rx='5'%20fill='none'%20stroke='%234cc9f0'%20stroke-width='2.5'/%3E%3Crect%20x='10.5'%20y='10.5'%20width='11'%20height='11'%20rx='2'%20fill='%234cc9f0'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/main.css">
+  <script>
+    // Apply the saved (or system) theme before first paint to avoid a flash.
+    document.documentElement.dataset.theme =
+      localStorage.getItem('substrate-theme')
+      || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  </script>
 </head>
 <body>
   <div id="app" data-layer="filespace">
@@ -20,6 +26,7 @@
   <div id="layer-toggle">
     <button data-layer="filespace" class="active">Filespace</button>
     <button data-layer="workspace">Workspace</button>
+    <button id="theme-btn" title="toggle light / dark">☾</button>
   </div>
   <div id="tooltip" class="hidden"></div>
   <div id="toast-tray"></div>

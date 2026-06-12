@@ -3,7 +3,7 @@
 // init modules → connectEvents → getProposals → key bindings.
 
 import { bus } from './bus.js';
-import { state, setLayer, clearSelection, toast } from './state.js';
+import { state, setLayer, clearSelection, toast, setTheme, currentTheme } from './state.js';
 import * as api from './api.js';
 import { initFilespace } from './filespace.js';
 import { initWorkspace, openWindow } from './workspace.js';
@@ -15,6 +15,17 @@ function wireLayerToggle() {
   toggle.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-layer]');
     if (btn) setLayer(btn.dataset.layer);
+  });
+}
+
+function wireThemeToggle() {
+  const btn = document.getElementById('theme-btn');
+  if (!btn) return;
+  const glyph = () => { btn.textContent = currentTheme() === 'light' ? '☀' : '☾'; };
+  glyph();
+  btn.addEventListener('click', () => {
+    setTheme(currentTheme() === 'light' ? 'dark' : 'light');
+    glyph();
   });
 }
 
@@ -52,6 +63,7 @@ function wireDiskRefresh() {
 
 async function boot() {
   wireLayerToggle();
+  wireThemeToggle();
   wireKeys();
   wireDiskRefresh();
 

@@ -25,7 +25,58 @@
 
   --glass: rgba(13, 17, 26, 0.72);
   --glass-deep: rgba(9, 12, 19, 0.88);
+
+  /* surfaces (overridden by the light theme) */
+  --input-bg: rgba(7, 9, 15, 0.6);
+  --strip-bg: linear-gradient(180deg, rgba(12, 16, 25, 0.92), rgba(9, 12, 19, 0.78));
+  --panel-bg: rgba(10, 13, 20, 0.6);
+  --titlebar-bg: rgba(7, 9, 15, 0.35);
+  --chip-bg: rgba(19, 26, 38, 0.55);
+  --chip-bg-hover: rgba(27, 36, 51, 0.7);
+  --feed-bg: rgba(12, 16, 24, 0.55);
+  --dot: rgba(200, 212, 232, 0.05);
+  --scroll-hover: #3a4c6b;
+
+  color-scheme: dark;
 }
+
+/* ---------- light theme (pale stone) ---------- */
+
+:root[data-theme="light"] {
+  --bg: #edf0f6;          /* bright void */
+  --marble: #e1e7f0;      /* pale uncarved stone */
+  --marble-vein: #d0d9e6; /* strata lines */
+  --carve: #f8fafd;       /* excavated cavity — lighter than stone = opened air */
+  --chamber: #c3d2e6;     /* file chamber fill */
+  --chamber-hot: #afc4df;
+  --line: #b2bfd3;
+  --ink: #243349;
+  --ink-dim: #5f6e86;
+  --accent: #0c7fa8;      /* deeper cyan for contrast on light */
+  --gold: #a8730f;
+  --green: #2c8a54;
+  --violet: #6b4ecf;
+  --down: #2e6cc9;
+  --hot: #cf3d3d;
+
+  --glass: rgba(251, 252, 255, 0.8);
+  --glass-deep: rgba(243, 246, 251, 0.92);
+
+  --input-bg: rgba(255, 255, 255, 0.65);
+  --strip-bg: linear-gradient(180deg, rgba(249, 251, 254, 0.92), rgba(238, 242, 248, 0.8));
+  --panel-bg: rgba(245, 248, 252, 0.65);
+  --titlebar-bg: rgba(236, 241, 248, 0.5);
+  --chip-bg: rgba(255, 255, 255, 0.55);
+  --chip-bg-hover: rgba(255, 255, 255, 0.85);
+  --feed-bg: rgba(255, 255, 255, 0.6);
+  --dot: rgba(36, 51, 73, 0.07);
+  --scroll-hover: #93a3bb;
+
+  color-scheme: light;
+}
+
+/* dark-glass surfaces injected by comms.js — give them a light counterpart */
+:root[data-theme="light"] .cx-console .cx-feed { background: var(--feed-bg); }
 
 /* ---------- reset ---------- */
 
@@ -55,7 +106,7 @@ input, textarea {
   font-family: var(--font);
   font-size: 12px;
   color: var(--ink);
-  background: rgba(7, 9, 15, 0.6);
+  background: var(--input-bg);
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 6px 10px;
@@ -78,7 +129,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover { background: #3a4c6b; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); background-clip: padding-box; }
 
 ::selection { background: rgba(76, 201, 240, 0.25); }
 
@@ -102,7 +153,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   align-items: center;
   gap: 18px;
   padding: 0 20px;
-  background: linear-gradient(180deg, rgba(12, 16, 25, 0.92), rgba(9, 12, 19, 0.78));
+  background: var(--strip-bg);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
   /* the membrane's upper surface — continuous with the filespace band */
@@ -120,7 +171,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   flex-direction: column;
   gap: 4px;
   padding: 16px 12px;
-  background: rgba(10, 13, 20, 0.6);
+  background: var(--panel-bg);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
   border-right: 1px solid var(--line);
@@ -233,6 +284,16 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   box-shadow: inset 0 0 0 1px rgba(76, 201, 240, 0.25);
 }
 
+#theme-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 1;
+  border-left: 1px solid var(--line);
+  border-radius: 0 999px 999px 0;
+  margin-left: 2px;
+}
+#theme-btn:hover { color: var(--accent); }
+
 /* ---------- tooltip (§4) ---------- */
 
 #tooltip {
@@ -325,7 +386,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   flex: none;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
-  background: rgba(7, 9, 15, 0.35);
+  background: var(--titlebar-bg);
   cursor: grab;
   -webkit-user-select: none;
   user-select: none;
@@ -737,7 +798,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
   padding: 7px 14px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: rgba(19, 26, 38, 0.55);
+  background: var(--chip-bg);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   font-size: 11.5px;
@@ -750,7 +811,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-dim); opacity: 0.7;
 
 .comm-chip:hover {
   border-color: rgba(76, 201, 240, 0.45);
-  background: rgba(27, 36, 51, 0.7);
+  background: var(--chip-bg-hover);
   box-shadow: 0 0 18px rgba(76, 201, 240, 0.14);
   transform: translateY(-1px);
 }

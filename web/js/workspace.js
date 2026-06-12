@@ -370,7 +370,7 @@ function buildMinimap() {
     height: MM_H + 'px',
     borderRadius: '10px',
     border: '1px solid var(--line, #2c3a52)',
-    background: 'rgba(12, 16, 24, 0.72)',
+    background: 'var(--glass, rgba(12, 16, 24, 0.72))',
     backdropFilter: 'blur(14px)',
     WebkitBackdropFilter: 'blur(14px)',
     overflow: 'hidden',
@@ -412,6 +412,9 @@ function scheduleMinimap() {
   if (minimapRaf || !minimapCtx) return;
   minimapRaf = requestAnimationFrame(drawMinimap);
 }
+
+// Re-sample CSS vars and repaint the minimap when the theme flips.
+bus.on('theme:changed', () => { colors = null; scheduleMinimap(); });
 
 function drawMinimap() {
   minimapRaf = 0;
@@ -502,7 +505,7 @@ export function initWorkspace(containerEl) {
     transformOrigin: '0 0',
     willChange: 'transform',
     // faint world-space dot grid so pan/zoom reads even on an empty plane
-    backgroundImage: 'radial-gradient(circle, rgba(200, 212, 232, 0.05) 1px, transparent 1.5px)',
+    backgroundImage: 'radial-gradient(circle, var(--dot, rgba(200, 212, 232, 0.05)) 1px, transparent 1.5px)',
     backgroundSize: '36px 36px',
   });
 
